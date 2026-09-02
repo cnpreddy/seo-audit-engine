@@ -22,8 +22,21 @@ import requests
 from bs4 import BeautifulSoup
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; LocalSEOAuditBot/1.0; +https://example.com/bot)"
+    # A real browser UA — many sites (Wix, Squarespace, Cloudflare-protected
+    # sites) silently return an empty or near-empty page to obvious bot UAs
+    # instead of an error, which used to make this tool report false
+    # "no title / no H1 / everything missing" results for those sites.
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/webp,*/*;q=0.8"),
+    "Accept-Language": "en-US,en;q=0.9",
+    # Deliberately omit brotli (br) — some environments lack a brotli
+    # decoder, which can silently yield an empty/garbled body.
+    "Accept-Encoding": "gzip, deflate",
 }
+
+MIN_VALID_HTML_LENGTH = 500
 
 # Each check returns: (passed: bool, weight: int, label: str, detail: str, fix: str)
 CHECKS = []
@@ -63,6 +76,14 @@ def run_audit(url, business_name=None, city=None):
     try:
         resp = fetch(url if url.startswith("http") else f"https://{url}")
         html = resp.text
+        if len(html.strip()) < MIN_VALID_HTML_LENGTH:
+            raise ValueError(
+                f"Response body was only {len(html.strip())} characters — this "
+                "usually means the site blocked the request (bot/WAF protection) "
+                "or requires JavaScript to render, not that the page is actually "
+                "empty. Results below would be unreliable, so this audit stopped "
+                "rather than report false findings."
+            )
         soup = BeautifulSoup(html, "html.parser")
         fetch_ok = True
     except Exception as e:
@@ -70,12 +91,15 @@ def run_audit(url, business_name=None, city=None):
             "label": "Website reachable",
             "passed": False,
             "weight": 20,
-            "detail": f"Could not load the site: {e}",
-            "fix": "Ensure the website is online and accessible over HTTPS.",
+            "detail": f"Could not reliably load the site: {e}",
+            "fix": "Ensure the website is online and accessible over HTTPS. If it "
+                   "uses bot protection (Cloudflare, etc.), this tool may need to "
+                   "be allowlisted or use a headless browser instead.",
         })
         return {
             "url": url, "business_name": business_name, "city": city,
             "score": 0, "max_score": 20, "checks": results,
+            "fetch_failed": True,
         }
 
     def add(weight, label, passed, detail, fix):
