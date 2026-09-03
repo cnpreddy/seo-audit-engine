@@ -112,6 +112,50 @@ def run_audit(url, business_name=None, city=None):
             "detail": detail, "fix": (None if passed else fix),
         })
 
+    # --- Suspicious-page detection ---
+    # A bot-protection challenge page (Cloudflare "Just a moment...", a CAPTCHA
+    # wall, etc.) can easily be several KB — long enough to pass the raw length
+    # guard above — while still having none of a real page's basic signals.
+    # Rather than silently score that as "this business has zero SEO" (false
+    # and misleading), detect it and report an honest "couldn't verify" result.
+    title_raw = soup.title.string.strip() if soup.title and soup.title.string else ""
+    meta_desc_tag_raw = soup.find("meta", attrs={"name": "description"})
+    meta_desc_raw = meta_desc_tag_raw.get("content", "").strip() if meta_desc_tag_raw else ""
+    h1s_raw = soup.find_all("h1")
+
+    CHALLENGE_MARKERS = [
+        "just a moment", "checking your browser", "cf-browser-verification",
+        "enable javascript and cookies", "attention required", "captcha",
+        "access denied", "verify you are a human", "ray id",
+    ]
+    lower_html = html.lower()
+    looks_like_challenge = any(m in lower_html for m in CHALLENGE_MARKERS)
+    looks_empty_of_signals = (not title_raw) and (not meta_desc_raw) and (len(h1s_raw) == 0)
+
+    if looks_like_challenge or looks_empty_of_signals:
+        reason = ("a bot-protection/challenge page was detected in the response"
+                   if looks_like_challenge else
+                   "the page has no title, no meta description, and no H1 tag "
+                   "at all — extremely unusual for a real business homepage, "
+                   "and much more likely to mean the request was blocked or "
+                   "served a JavaScript-only shell than that the page is "
+                   "genuinely blank")
+        results.append({
+            "label": "Website reachable",
+            "passed": False,
+            "weight": 20,
+            "detail": f"Could not reliably audit this site: {reason}.",
+            "fix": "This site may be behind bot protection (Cloudflare, etc.) or "
+                   "require JavaScript to render its real content. Try verifying "
+                   "manually in a browser, or this tool may need a headless-"
+                   "browser fetcher instead of a plain HTTP request for this site.",
+        })
+        return {
+            "url": url, "business_name": business_name, "city": city,
+            "score": 0, "max_score": 20, "checks": results,
+            "fetch_failed": True,
+        }
+
     # 1. HTTPS / SSL
     https_ok = url.startswith("https://") or get_ssl_info(hostname)
     add(10, "Secure connection (HTTPS)", https_ok,
@@ -119,22 +163,21 @@ def run_audit(url, business_name=None, city=None):
         "Install an SSL certificate and force all traffic to HTTPS. Google penalizes insecure sites in rankings.")
 
     # 2. Title tag
-    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    title = title_raw
     title_ok = 10 <= len(title) <= 65
     add(10, "Title tag present & well-sized", title_ok,
         f"Title: \"{title}\" ({len(title)} chars)." if title else "No <title> tag found.",
         "Write a unique title (50-60 characters) that includes your business type and city, e.g. 'Acme Plumbing | 24/7 Plumber in Austin, TX'.")
 
     # 3. Meta description
-    meta_desc_tag = soup.find("meta", attrs={"name": "description"})
-    meta_desc = meta_desc_tag.get("content", "").strip() if meta_desc_tag else ""
+    meta_desc = meta_desc_raw
     meta_ok = 50 <= len(meta_desc) <= 165
     add(8, "Meta description present & well-sized", meta_ok,
         f"Meta description: \"{meta_desc[:100]}...\" ({len(meta_desc)} chars)." if meta_desc else "No meta description found.",
         "Add a 120-160 character meta description summarizing your services and service area to improve click-through from search results.")
 
     # 4. H1 tag
-    h1s = soup.find_all("h1")
+    h1s = h1s_raw
     h1_ok = len(h1s) == 1
     add(6, "Single, clear H1 heading", h1_ok,
         f"Found {len(h1s)} H1 tag(s)." + (f" Text: \"{h1s[0].get_text(strip=True)}\"" if h1s else ""),
