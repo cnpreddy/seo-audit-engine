@@ -123,17 +123,24 @@ def run_audit(url, business_name=None, city=None):
     meta_desc_raw = meta_desc_tag_raw.get("content", "").strip() if meta_desc_tag_raw else ""
     h1s_raw = soup.find_all("h1")
 
+    # NOTE: these markers are used only to make the failure message more
+    # specific — they must NEVER trigger on their own. Words like "captcha"
+    # or "access denied" show up on plenty of completely normal sites (a
+    # reCAPTCHA widget on a contact form, boilerplate error-handling JS,
+    # etc.), so gating on them alone caused false positives on real,
+    # perfectly fine sites. The only real trigger is looks_empty_of_signals.
     CHALLENGE_MARKERS = [
         "just a moment", "checking your browser", "cf-browser-verification",
-        "enable javascript and cookies", "attention required", "captcha",
-        "access denied", "verify you are a human", "ray id",
+        "enable javascript and cookies", "attention required",
+        "verify you are a human", "ray id",
     ]
     lower_html = html.lower()
     looks_like_challenge = any(m in lower_html for m in CHALLENGE_MARKERS)
     looks_empty_of_signals = (not title_raw) and (not meta_desc_raw) and (len(h1s_raw) == 0)
 
-    if looks_like_challenge or looks_empty_of_signals:
-        reason = ("a bot-protection/challenge page was detected in the response"
+    if looks_empty_of_signals:
+        reason = ("a bot-protection/challenge page was detected in the response, "
+                   "and the page has no title, meta description, or H1 tag"
                    if looks_like_challenge else
                    "the page has no title, no meta description, and no H1 tag "
                    "at all — extremely unusual for a real business homepage, "
